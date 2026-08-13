@@ -29,7 +29,10 @@ Then set the Music Flamingo URL in Side-Step to::
 Requires: fastapi, uvicorn, python-multipart (plus the model's own deps).
 """
 
-from __future__ import annotations
+# NOTE: deliberately no ``from __future__ import annotations`` here.
+# PEP 563 turns the endpoint annotations into strings, and FastAPI then
+# cannot resolve ``UploadFile`` (imported inside build_app, so not a
+# module global) — every upload fails with a PydanticUserError.
 
 import argparse
 import json
