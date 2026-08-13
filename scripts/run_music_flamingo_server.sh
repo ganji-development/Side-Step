@@ -6,18 +6,24 @@
 # Sharing the venv would break the trainer's text encoder.
 #
 # Usage:
-#   ./scripts/run_music_flamingo_server.sh nvidia/music-flamingo-2601-hf
+#   ./scripts/run_music_flamingo_server.sh
 #   ./scripts/run_music_flamingo_server.sh /path/to/local/model 8100
+#   ./scripts/run_music_flamingo_server.sh nvidia/music-flamingo-2601-hf
+#
+# With no arguments it uses checkpoints/music-flamingo-2601-hf in the repo.
 #
 # Costs ~3GB of disk for a second torch. That is the price of not
 # breaking the trainer.
 
 set -euo pipefail
 
-MODEL="${1:-nvidia/music-flamingo-2601-hf}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Defaults to the local checkpoint; pass a path or Hub id to override.
+MODEL="${1:-$REPO_ROOT/checkpoints/music-flamingo-2601-hf}"
 PORT="${2:-8100}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${MF_VENV_DIR:-$HOME/.venvs/music-flamingo}"
 TORCH_INDEX="${MF_TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
 
