@@ -322,6 +322,11 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
         existing = read_sidecar(sidecar)
         merged = merge_fields(existing, {"lyrics": lyrics}, policy="overwrite_lyrics")
+        if not args.no_instrumental:
+            # This track has lyrics, so it is definitively not instrumental.
+            # overwrite_all only touches the keys present in new_fields, so
+            # this corrects a wrong value without disturbing caption/bpm/key.
+            merged = merge_fields(merged, {"is_instrumental": "false"}, policy="overwrite_all")
 
         had = "replacing" if existing.get("lyrics", "").strip() else "adding"
         n_lines = len(lyrics.splitlines())
@@ -333,7 +338,33 @@ def cmd_apply(args: argparse.Namespace) -> int:
             write_sidecar(sidecar, merged)
         written += 1
 
+    # Audio with no matching lyrics document is instrumental by the user's
+    # rule. Worth stating explicitly: a caption pass may have written a
+    # wrong is_instrumental, and an explicit value beats dataset_builder's
+    # inference from empty lyrics.
+    instrumental = 0
+    if not args.no_instrumental:
+        for item in data.get("review", []):
+            audio = item.get("unmatched_audio")
+            if not audio:
+                continue
+            sidecar = Path(audio).with_suffix(".txt")
+            existing = read_sidecar(sidecar)
+            if existing.get("lyrics", "").strip():
+                continue  # has lyrics from somewhere else — leave it alone
+            merged = merge_fields(
+                existing, {"is_instrumental": "true"}, policy="overwrite_all",
+            )
+            was = existing.get("is_instrumental", "").strip() or "unset"
+            print(f"  {'WOULD MARK' if dry_run else 'MARK'}  {sidecar.name}  "
+                  f"instrumental (was: {was})")
+            if not dry_run:
+                write_sidecar(sidecar, merged)
+            instrumental += 1
+
     print()
+    if instrumental:
+        print(f"{'Would mark' if dry_run else 'Marked'} {instrumental} track(s) instrumental.")
     if dry_run:
         print(f"[DRY RUN] {written} sidecar(s) would be written, {skipped} skipped.")
         print("          Re-run with --write to apply.")
@@ -361,6 +392,9 @@ def main() -> int:
     p_apply.add_argument("--write", action="store_true", help="actually write (default: dry run)")
     p_apply.add_argument("--include-ambiguous", action="store_true",
                          help="also write entries flagged ambiguous")
+    p_apply.add_argument("--no-instrumental", action="store_true",
+                         help="do not set is_instrumental (default: audio with no "
+                              "lyrics file is marked instrumental, audio with lyrics false)")
     p_apply.set_defaults(func=cmd_apply)
 
     args = parser.parse_args()
