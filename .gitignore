@@ -39,3 +39,5 @@ presets/
 # Vendored TensorBoard source and downloaded HTML references
 assets/tensorboard/
 assets/*.html
+venv_rocm/
+dist/

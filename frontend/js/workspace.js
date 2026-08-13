@@ -31,11 +31,17 @@ function switchMode(mode) {
 function startGlobalGPUFeed() {
   if (typeof API === "undefined" || typeof API.connectGpuWS !== "function") return;
   if (_workspaceGpuWs) return;
-  _workspaceGpuWs = API.connectGpuWS((data) => {
-    if (data && typeof data === "object" && typeof AppState !== "undefined") {
-      AppState.setGPU(data);
-    }
-  });
+  // new WebSocket() can throw synchronously (mixed content, bad URL). Telemetry
+  // is optional — never let it abort init() and leave the UI unwired.
+  try {
+    _workspaceGpuWs = API.connectGpuWS((data) => {
+      if (data && typeof data === "object" && typeof AppState !== "undefined") {
+        AppState.setGPU(data);
+      }
+    });
+  } catch (e) {
+    console.warn("GPU telemetry unavailable:", e);
+  }
 }
 
 /* ---- Toast notifications ---- */

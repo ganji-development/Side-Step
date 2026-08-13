@@ -34,7 +34,7 @@ def generate_token() -> str:
 # ---------------------------------------------------------------------------
 
 # Paths that do NOT require auth (static assets, index page, defaults)
-_PUBLIC_PREFIXES = ("/css/", "/js/", "/fonts/", "/favicon", "/api/defaults")
+_PUBLIC_PREFIXES = ("/css/", "/js/", "/fonts/", "/favicon", "/icon.png", "/api/defaults")
 
 
 def _is_protected(path: str) -> bool:

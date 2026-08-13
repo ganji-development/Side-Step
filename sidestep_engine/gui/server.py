@@ -240,6 +240,20 @@ def create_app(token: str | None = None, port: int = 8770) -> FastAPI:
             logger.debug("[Side-Step GUI] Token injected into index.html")
         return HTMLResponse(html)
 
+    @app.get("/icon.png")
+    async def icon_png():
+        p = _FRONTEND_DIR / "icon.png"
+        if not p.is_file():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return FileResponse(str(p), media_type="image/png")
+
+    @app.get("/favicon.ico")
+    async def favicon_ico():
+        p = _FRONTEND_DIR / "favicon.ico"
+        if not p.is_file():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return FileResponse(str(p), media_type="image/x-icon")
+
     @app.get("/theme-editor")
     async def theme_editor():
         from starlette.responses import HTMLResponse

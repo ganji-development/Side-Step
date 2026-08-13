@@ -281,6 +281,14 @@ const API = (() => {
     return t ? `?token=${t}` : '';
   }
 
+  // Match the page's scheme — a page served over HTTPS (e.g. behind a
+  // reverse proxy) may only open wss://, and new WebSocket() throws
+  // synchronously on mixed content rather than firing onerror.
+  function _wsBase() {
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${scheme}//${location.host}`;
+  }
+
   function _setConsoleLine(msg, kind) {
     const el = document.getElementById('console-line');
     if (el) { el.textContent = msg; el.className = 'console__line' + (kind ? ' console__line--' + kind : ''); }
@@ -289,7 +297,7 @@ const API = (() => {
   function connectTrainingWS(onMessage) {
     let ws, _timer, _closed = false, _wasConnected = false;
     function _connect() {
-      ws = new WebSocket(`ws://${location.host}/ws/training${_wsAuth()}`);
+      ws = new WebSocket(`${_wsBase()}/ws/training${_wsAuth()}`);
       ws.onopen = () => {
         if (_wasConnected) _setConsoleLine('Connection restored', 'epoch');
         _wasConnected = true;
@@ -316,7 +324,7 @@ const API = (() => {
   function connectGpuWS(onMessage) {
     let ws, _timer, _closed = false, _wasConnected = false;
     function _connect() {
-      ws = new WebSocket(`ws://${location.host}/ws/gpu${_wsAuth()}`);
+      ws = new WebSocket(`${_wsBase()}/ws/gpu${_wsAuth()}`);
       ws.onopen = () => { _wasConnected = true; };
       ws.onmessage = (e) => {
         try { onMessage(JSON.parse(e.data)); }
@@ -332,7 +340,7 @@ const API = (() => {
   }
 
   function connectTaskWS(taskId, onMessage) {
-    const ws = new WebSocket(`ws://${location.host}/ws/task/${taskId}${_wsAuth()}`);
+    const ws = new WebSocket(`${_wsBase()}/ws/task/${taskId}${_wsAuth()}`);
     ws.onmessage = (e) => {
       try { onMessage(JSON.parse(e.data)); }
       catch (err) { console.warn('[WS:task] message handler error:', err); }
