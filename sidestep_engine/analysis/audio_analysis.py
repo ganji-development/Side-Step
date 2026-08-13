@@ -225,6 +225,41 @@ def _preprocess_audio(y: np.ndarray, sr: int) -> np.ndarray:
 # ── Step 1: Demucs stem separation ─────────────────────────────────
 
 
+def _load_audio_tensor(audio_path: Path):
+    """Load audio as a ``(channels, samples)`` float32 tensor + sample rate.
+
+    Deliberately avoids ``torchaudio.load``: torchaudio >= 2.9 delegates
+    decoding to torchcodec, which dlopens FFmpeg and is ABI-locked to the
+    exact torch build (a mismatch surfaces as ``undefined symbol``).
+    soundfile has no such coupling; librosa covers what libsndfile can't
+    decode (m4a/aac), shelling out to the ffmpeg binary instead.
+    """
+    import torch
+
+    try:
+        import soundfile as sf
+        data, sr = sf.read(str(audio_path), dtype="float32", always_2d=True)
+        # soundfile gives (samples, channels) — Demucs wants (channels, samples)
+        wav = torch.from_numpy(np.ascontiguousarray(data.T))
+    except Exception as exc:
+        logger.debug("soundfile could not read %s (%s); trying librosa", audio_path.name, exc)
+        import librosa
+        y, sr = librosa.load(str(audio_path), sr=None, mono=False)
+        arr = np.atleast_2d(y).astype(np.float32, copy=False)
+        wav = torch.from_numpy(np.ascontiguousarray(arr))
+    return wav, int(sr)
+
+
+def _save_audio_tensor(path: Path, tensor, sr: int) -> None:
+    """Write a ``(channels, samples)`` tensor to disk without torchaudio."""
+    import soundfile as sf
+
+    arr = tensor.detach().cpu().numpy()
+    if arr.ndim == 1:
+        arr = arr[None, :]
+    sf.write(str(path), arr.T, int(sr))  # soundfile wants (samples, channels)
+
+
 def separate_stems(
     audio_path: Path,
     output_dir: Path,
@@ -257,8 +292,8 @@ def separate_stems(
     model.to(torch_device)
     model.eval()
 
-    # Load audio — torchaudio returns (channels, samples) and sample rate
-    wav, sr = torchaudio.load(str(audio_path))
+    # Load audio — returns (channels, samples) and sample rate
+    wav, sr = _load_audio_tensor(audio_path)
 
     # Resample to model's expected rate (44100 Hz) if needed
     if sr != model.samplerate:
@@ -293,8 +328,8 @@ def separate_stems(
     drums_path = output_dir / "drums.wav"
     harmonics_path = output_dir / "harmonics.wav"
 
-    torchaudio.save(str(drums_path), drums, sr)
-    torchaudio.save(str(harmonics_path), harmonics, sr)
+    _save_audio_tensor(drums_path, drums, sr)
+    _save_audio_tensor(harmonics_path, harmonics, sr)
 
     # Free the model and tensors
     del model, sources, wav, drums, bass, other, harmonics
