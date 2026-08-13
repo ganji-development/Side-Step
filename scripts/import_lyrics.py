@@ -197,7 +197,17 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
-    from sidestep_engine.data.sidecar_io import merge_fields, read_sidecar, write_sidecar
+    # sidecar_io reaches into the engine, which imports torch. 'scan' has no
+    # such dependency, so it runs happily on a bare interpreter and only
+    # 'apply' discovers the mismatch.
+    try:
+        from sidestep_engine.data.sidecar_io import merge_fields, read_sidecar, write_sidecar
+    except ModuleNotFoundError as exc:
+        print(f"[FAIL] Missing dependency ({exc.name}) - run this with the "
+              f"Side-Step venv, not a bare python:")
+        print(f"       .venv/bin/python {Path(*Path(__file__).parts[-2:])} "
+              f"apply {args.mapping}" + (" --write" if args.write else ""))
+        return 1
 
     map_path = Path(args.mapping).expanduser()
     if not map_path.is_file():
