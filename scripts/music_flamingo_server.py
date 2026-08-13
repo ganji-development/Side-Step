@@ -37,6 +37,7 @@ Requires: fastapi, uvicorn, python-multipart (plus the model's own deps).
 import argparse
 import json
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -120,6 +121,79 @@ def run_inference(audio_path: str, prompt: str, max_new_tokens: int) -> str:
 
 # ── Response shaping ───────────────────────────────────────────────
 
+# Music Flamingo caps audio at 20 minutes (30s windows). The model card
+# says longer input is truncated, but the implementation instead indexes
+# out of bounds in the audio positional embedding and fires a CUDA
+# device-side assert — which corrupts the context for the whole process.
+# Truncate ourselves, with a margin, rather than trusting that.
+_MAX_AUDIO_SECONDS = 19 * 60
+
+# The model consumes audio in 30s windows. Lengths landing exactly on a
+# window boundary overflow the positional-embedding table by one.
+_WINDOW_SECONDS = 30
+_BOUNDARY_EPSILON = 0.05
+_BOUNDARY_PAD_SECONDS = 0.5
+
+
+def _pad_with_silence(path: str, samplerate: int) -> str:
+    """Append a little silence and return the new temp file's path."""
+    import numpy as np
+    import soundfile as sf
+
+    data, sr = sf.read(path, dtype="float32", always_2d=True)
+    pad = np.zeros((int(_BOUNDARY_PAD_SECONDS * sr), data.shape[1]), dtype="float32")
+    padded = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    padded.close()
+    sf.write(padded.name, np.concatenate([data, pad], axis=0), sr)
+    return padded.name
+
+
+def prepare_audio(path: str) -> str:
+    """Return a path safe to feed the model, truncating over-long audio.
+
+    Writes a shortened copy when needed; the original is left alone.
+    """
+    import soundfile as sf
+
+    try:
+        info = sf.info(path)
+        duration = float(info.frames) / float(info.samplerate or 1)
+    except Exception as exc:
+        logger.warning("Could not probe duration (%s); passing through", exc)
+        return path
+
+    if duration <= _MAX_AUDIO_SECONDS:
+        # Audio whose length lands exactly on a 30s window boundary trips an
+        # off-by-one in the audio positional embedding (index == table size),
+        # firing a CUDA device-side assert. A little silence moves it off the
+        # boundary and is inaudible to the model's description.
+        remainder = duration % _WINDOW_SECONDS
+        if remainder < _BOUNDARY_EPSILON or remainder > (_WINDOW_SECONDS - _BOUNDARY_EPSILON):
+            logger.warning(
+                "Duration %.3fs sits on a %ds window boundary — padding %.1fs "
+                "of silence to avoid the audio-embedding off-by-one",
+                duration, _WINDOW_SECONDS, _BOUNDARY_PAD_SECONDS,
+            )
+            return _pad_with_silence(path, info.samplerate)
+        return path
+
+    keep_frames = int(_MAX_AUDIO_SECONDS * info.samplerate)
+    logger.warning(
+        "Audio is %.1f min, over the %.0f min cap — truncating for inference",
+        duration / 60.0, _MAX_AUDIO_SECONDS / 60.0,
+    )
+    data, sr = sf.read(path, frames=keep_frames, dtype="float32", always_2d=True)
+    trimmed = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+    trimmed.close()
+    sf.write(trimmed.name, data, sr)
+    return trimmed.name
+
+
+def _is_cuda_assert(exc: BaseException) -> bool:
+    """A device-side assert leaves the CUDA context unusable process-wide."""
+    return "device-side assert" in str(exc).lower()
+
+
 _JSON_BLOCK = re.compile(r"\{.*\}", re.S)
 
 _ALLOWED_KEYS = (
@@ -183,19 +257,38 @@ def build_app(max_new_tokens: int):
     ):
         suffix = Path(file.filename or "audio.wav").suffix or ".wav"
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        audio_path = tmp.name
         try:
             with tmp:
                 shutil.copyfileobj(file.file, tmp)
             logger.info("caption: %s (%s)", file.filename, prompt[:60])
-            raw = run_inference(tmp.name, prompt, max_new_tokens)
+            audio_path = prepare_audio(tmp.name)
+            raw = run_inference(audio_path, prompt, max_new_tokens)
             payload = shape_response(raw)
             logger.info("  -> %s", json.dumps(payload)[:200])
             return JSONResponse(payload)
         except Exception as exc:
             logger.exception("Inference failed for %s", file.filename)
+            if _is_cuda_assert(exc):
+                # The CUDA context is now poisoned: every later request in
+                # this process fails too, turning one bad file into a run
+                # of bogus failures. Die so the supervisor restarts clean.
+                logger.critical(
+                    "CUDA context corrupted by %s — exiting so the server "
+                    "restarts. Remaining files would otherwise all fail.",
+                    file.filename,
+                )
+                import threading
+                threading.Timer(0.5, lambda: os._exit(70)).start()
+                return JSONResponse(
+                    {"error": f"CUDA assert on {file.filename}; server restarting"},
+                    status_code=503,
+                )
             return JSONResponse({"error": str(exc)}, status_code=500)
         finally:
             Path(tmp.name).unlink(missing_ok=True)
+            if audio_path != tmp.name:
+                Path(audio_path).unlink(missing_ok=True)
 
     # Side-Step only posts to /caption for local URLs, but accept the
     # generic-endpoint names too so a differently-shaped URL still works.
